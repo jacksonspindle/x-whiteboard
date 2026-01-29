@@ -130,6 +130,28 @@ export function usePosts() {
     [supabase, fetchPosts]
   );
 
+  const updateDimensions = useCallback(
+    async (id: string, width: number, height: number) => {
+      // Optimistic update
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === id ? { ...p, width, height } : p
+        )
+      );
+
+      const { error } = await supabase
+        .from('posts')
+        .update({ width, height })
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error updating dimensions:', error);
+        fetchPosts();
+      }
+    },
+    [supabase, fetchPosts]
+  );
+
   const deletePost = useCallback(
     async (id: string) => {
       // Optimistic update
@@ -152,6 +174,7 @@ export function usePosts() {
     posts,
     loading,
     updatePosition,
+    updateDimensions,
     deletePost,
     refetch: fetchPosts,
   };

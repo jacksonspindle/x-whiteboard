@@ -6,15 +6,19 @@ import { useRouter } from 'next/navigation';
 import Whiteboard from '@/components/Whiteboard';
 import AuthButton from '@/components/AuthButton';
 import { usePosts } from '@/hooks/usePosts';
+import { useTextNotes } from '@/hooks/useTextNotes';
 import { Layers, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
 export default function WhiteboardPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const { posts, loading, updatePosition, deletePost } = usePosts();
+  const { posts, loading: postsLoading, updatePosition, updateDimensions, deletePost } = usePosts();
+  const { textNotes, loading: notesLoading, createTextNote, updateTextNote, deleteTextNote } = useTextNotes();
   const router = useRouter();
   const supabase = createClient();
+
+  const loading = postsLoading || notesLoading;
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -52,7 +56,7 @@ export default function WhiteboardPage() {
         </Link>
         <div className="flex items-center gap-4">
           <span className="text-sm text-zinc-500">
-            {posts.length} post{posts.length !== 1 ? 's' : ''}
+            {posts.length} post{posts.length !== 1 ? 's' : ''}, {textNotes.length} note{textNotes.length !== 1 ? 's' : ''}
           </span>
           <AuthButton />
         </div>
@@ -68,7 +72,12 @@ export default function WhiteboardPage() {
           <Whiteboard
             posts={posts}
             onUpdatePosition={updatePosition}
+            onUpdateDimensions={updateDimensions}
             onDeletePost={deletePost}
+            textNotes={textNotes}
+            onCreateTextNote={createTextNote}
+            onUpdateTextNote={updateTextNote}
+            onDeleteTextNote={deleteTextNote}
           />
         )}
       </div>

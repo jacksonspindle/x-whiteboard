@@ -38,6 +38,19 @@ export interface CanvasState {
   scale: number;
 }
 
+export interface TextNote {
+  id: string;
+  user_id: string;
+  content: string;
+  position_x: number;
+  position_y: number;
+  width: number;
+  height: number;
+  font_size: number;
+  color: string;
+  created_at: string;
+}
+
 export interface PostCreateInput {
   tweet_id: string;
   tweet_url: string;

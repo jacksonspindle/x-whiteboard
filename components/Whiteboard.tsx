@@ -1,46 +1,81 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Post } from '@/lib/types';
+import { Post, TextNote as TextNoteType } from '@/lib/types';
 import PostCard from './PostCard';
+import TextNote from './TextNote';
 import Toolbar from './Toolbar';
 
 interface WhiteboardProps {
   posts: Post[];
   onUpdatePosition: (id: string, x: number, y: number) => void;
+  onUpdateDimensions: (id: string, width: number, height: number) => void;
   onDeletePost: (id: string) => void;
+  textNotes: TextNoteType[];
+  onCreateTextNote: (x: number, y: number) => Promise<TextNoteType | null>;
+  onUpdateTextNote: (id: string, updates: Partial<TextNoteType>) => void;
+  onDeleteTextNote: (id: string) => void;
 }
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 3;
 const ZOOM_SENSITIVITY = 0.001;
 
+type DragType = 'post' | 'textNote';
+type SelectedItem = { id: string; type: DragType };
+
 export default function Whiteboard({
   posts,
   onUpdatePosition,
+  onUpdateDimensions,
   onDeletePost,
+  textNotes,
+  onCreateTextNote,
+  onUpdateTextNote,
+  onDeleteTextNote,
 }: WhiteboardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const postRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const elementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Use refs for camera to avoid re-renders during pan/zoom
   const cameraRef = useRef({ x: 0, y: 0, scale: 1 });
   const [cameraState, setCameraState] = useState({ x: 0, y: 0, scale: 1 });
 
   const isPanningRef = useRef(false);
-  const [cursorState, setCursorState] = useState<'grab' | 'grabbing'>('grab');
+  const [cursorState, setCursorState] = useState<'grab' | 'grabbing' | 'crosshair'>('grab');
+  const [isTextMode, setIsTextMode] = useState(false);
+
+  // Selection state
+  const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([]);
+  const [isStacking, setIsStacking] = useState(false);
 
   // Drag state - all refs for performance
   const dragStateRef = useRef<{
-    postId: string;
+    id: string;
+    type: DragType;
     offsetX: number;
     offsetY: number;
     currentX: number;
     currentY: number;
     element: HTMLDivElement | null;
   } | null>(null);
-  const [draggingPostId, setDraggingPostId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+
+  // Resize state
+  const resizeStateRef = useRef<{
+    id: string;
+    type: DragType;
+    startWidth: number;
+    startHeight: number;
+    startMouseX: number;
+    startMouseY: number;
+    element: HTMLDivElement | null;
+  } | null>(null);
+  const [resizingId, setResizingId] = useState<string | null>(null);
+
+  // Stacking animation state
+  const [stackingPositions, setStackingPositions] = useState<Map<string, { x: number; y: number; rotation: number; zIndex: number }>>(new Map());
 
   // Apply camera transform directly to DOM
   const applyTransform = useCallback(() => {
@@ -50,20 +85,153 @@ export default function Whiteboard({
     }
   }, []);
 
-  // Apply post position directly to DOM
-  const applyPostPosition = useCallback((element: HTMLDivElement, x: number, y: number) => {
+  // Apply element position directly to DOM
+  const applyElementPosition = useCallback((element: HTMLDivElement, x: number, y: number) => {
     element.style.left = `${x}px`;
     element.style.top = `${y}px`;
   }, []);
 
-  // Handle canvas panning
-  const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 0 || e.button === 1) {
-      e.preventDefault();
-      isPanningRef.current = true;
-      setCursorState('grabbing');
-    }
+  // Apply element size directly to DOM
+  const applyElementSize = useCallback((element: HTMLDivElement, width: number, height: number) => {
+    element.style.width = `${width}px`;
+    element.style.height = `${height}px`;
   }, []);
+
+  // Toggle text mode
+  const handleToggleTextMode = useCallback(() => {
+    setIsTextMode(prev => !prev);
+    setCursorState(prev => prev === 'crosshair' ? 'grab' : 'crosshair');
+    setSelectedItems([]); // Clear selection when changing modes
+  }, []);
+
+  // Check if an item is selected
+  const isSelected = useCallback((id: string) => {
+    return selectedItems.some(item => item.id === id);
+  }, [selectedItems]);
+
+  // Toggle selection of an item
+  const toggleSelection = useCallback((id: string, type: DragType) => {
+    setSelectedItems(prev => {
+      const exists = prev.some(item => item.id === id);
+      if (exists) {
+        return prev.filter(item => item.id !== id);
+      } else {
+        return [...prev, { id, type }];
+      }
+    });
+  }, []);
+
+  // Clear selection
+  const clearSelection = useCallback(() => {
+    setSelectedItems([]);
+    setStackingPositions(new Map());
+    setIsStacking(false);
+  }, []);
+
+  // Stack selected items with animation
+  const handleStackSelected = useCallback(() => {
+    if (selectedItems.length < 2) return;
+
+    setIsStacking(true);
+
+    // Find the center position of selected items
+    let totalX = 0;
+    let totalY = 0;
+    let count = 0;
+
+    selectedItems.forEach(item => {
+      if (item.type === 'post') {
+        const post = posts.find(p => p.id === item.id);
+        if (post) {
+          totalX += post.position_x;
+          totalY += post.position_y;
+          count++;
+        }
+      } else {
+        const note = textNotes.find(n => n.id === item.id);
+        if (note) {
+          totalX += note.position_x;
+          totalY += note.position_y;
+          count++;
+        }
+      }
+    });
+
+    const centerX = totalX / count;
+    const centerY = totalY / count;
+
+    // Create stacking positions with slight offsets and rotations
+    const newStackingPositions = new Map<string, { x: number; y: number; rotation: number; zIndex: number }>();
+
+    selectedItems.forEach((item, index) => {
+      // Each item gets a slight offset to create the stacked paper effect
+      const offsetX = (index - selectedItems.length / 2) * 3 + (Math.random() - 0.5) * 4;
+      const offsetY = (index - selectedItems.length / 2) * 2 + (Math.random() - 0.5) * 3;
+      const rotation = (Math.random() - 0.5) * 6; // Random rotation between -3 and 3 degrees
+
+      newStackingPositions.set(item.id, {
+        x: centerX + offsetX,
+        y: centerY + offsetY,
+        rotation,
+        zIndex: 100 + index,
+      });
+    });
+
+    setStackingPositions(newStackingPositions);
+
+    // After animation completes, save positions to database
+    setTimeout(() => {
+      selectedItems.forEach(item => {
+        const stackPos = newStackingPositions.get(item.id);
+        if (!stackPos) return;
+
+        if (item.type === 'post') {
+          onUpdatePosition(item.id, stackPos.x, stackPos.y);
+        } else {
+          onUpdateTextNote(item.id, {
+            position_x: stackPos.x,
+            position_y: stackPos.y,
+          });
+        }
+      });
+
+      // Clear stacking state after saving
+      setTimeout(() => {
+        setStackingPositions(new Map());
+        setIsStacking(false);
+        setSelectedItems([]);
+      }, 100);
+    }, 500); // Wait for animation to complete
+  }, [selectedItems, posts, textNotes, onUpdatePosition, onUpdateTextNote]);
+
+  // Handle canvas mouse down
+  const handleCanvasMouseDown = useCallback(async (e: React.MouseEvent) => {
+    if (e.button !== 0 && e.button !== 1) return;
+
+    // If in text mode, create a new text note
+    if (isTextMode && e.button === 0) {
+      e.preventDefault();
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const cam = cameraRef.current;
+      const canvasX = (e.clientX - rect.left - cam.x) / cam.scale;
+      const canvasY = (e.clientY - rect.top - cam.y) / cam.scale;
+
+      await onCreateTextNote(canvasX, canvasY);
+      return;
+    }
+
+    // Clear selection when clicking on empty canvas (unless shift is held)
+    if (!e.shiftKey && selectedItems.length > 0) {
+      clearSelection();
+    }
+
+    // Otherwise start panning
+    e.preventDefault();
+    isPanningRef.current = true;
+    setCursorState('grabbing');
+  }, [isTextMode, onCreateTextNote, selectedItems.length, clearSelection]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent) => {
     if (isPanningRef.current) {
@@ -76,10 +244,10 @@ export default function Whiteboard({
   const handleCanvasMouseUp = useCallback(() => {
     if (isPanningRef.current) {
       isPanningRef.current = false;
-      setCursorState('grab');
+      setCursorState(isTextMode ? 'crosshair' : 'grab');
       setCameraState({ ...cameraRef.current });
     }
-  }, []);
+  }, [isTextMode]);
 
   // Handle mouse wheel for zooming
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -106,16 +274,60 @@ export default function Whiteboard({
     setCameraState({ ...cam });
   }, [applyTransform]);
 
-  // Handle post drag start
-  const handlePostMouseDown = useCallback((e: React.MouseEvent, post: Post) => {
+  // Handle element drag start
+  const handleElementMouseDown = useCallback((
+    e: React.MouseEvent,
+    id: string,
+    type: DragType,
+    posX: number,
+    posY: number
+  ) => {
     if (e.button !== 0) return;
+
+    // Handle shift+click for multi-select
+    if (e.shiftKey) {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleSelection(id, type);
+      return;
+    }
+
+    // Check if clicking on resize handle
+    const target = e.target as HTMLElement;
+    if (target.dataset.resizeHandle === 'true') {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const element = elementRefs.current.get(id);
+      if (!element) return;
+
+      const rect = element.getBoundingClientRect();
+      resizeStateRef.current = {
+        id,
+        type,
+        startWidth: rect.width / cameraRef.current.scale,
+        startHeight: rect.height / cameraRef.current.scale,
+        startMouseX: e.clientX,
+        startMouseY: e.clientY,
+        element,
+      };
+
+      setResizingId(id);
+      return;
+    }
+
+    // Clear selection if clicking on unselected item without shift
+    if (!isSelected(id)) {
+      clearSelection();
+    }
+
     e.stopPropagation();
     e.preventDefault();
 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const element = postRefs.current.get(post.id);
+    const element = elementRefs.current.get(id);
     if (!element) return;
 
     const cam = cameraRef.current;
@@ -123,55 +335,96 @@ export default function Whiteboard({
     const mouseCanvasY = (e.clientY - rect.top - cam.y) / cam.scale;
 
     dragStateRef.current = {
-      postId: post.id,
-      offsetX: mouseCanvasX - post.position_x,
-      offsetY: mouseCanvasY - post.position_y,
-      currentX: post.position_x,
-      currentY: post.position_y,
+      id,
+      type,
+      offsetX: mouseCanvasX - posX,
+      offsetY: mouseCanvasY - posY,
+      currentX: posX,
+      currentY: posY,
       element,
     };
 
-    // Apply dragging styles
     element.style.zIndex = '1000';
     element.style.cursor = 'grabbing';
 
-    setDraggingPostId(post.id);
+    setDraggingId(id);
     setCursorState('grabbing');
-  }, []);
+  }, [toggleSelection, isSelected, clearSelection]);
 
   // Global mouse move/up handlers
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      // Handle drag
       const drag = dragStateRef.current;
-      if (!drag || !drag.element) return;
+      if (drag && drag.element) {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect) return;
 
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
+        const cam = cameraRef.current;
+        const mouseCanvasX = (e.clientX - rect.left - cam.x) / cam.scale;
+        const mouseCanvasY = (e.clientY - rect.top - cam.y) / cam.scale;
 
-      const cam = cameraRef.current;
-      const mouseCanvasX = (e.clientX - rect.left - cam.x) / cam.scale;
-      const mouseCanvasY = (e.clientY - rect.top - cam.y) / cam.scale;
+        drag.currentX = mouseCanvasX - drag.offsetX;
+        drag.currentY = mouseCanvasY - drag.offsetY;
 
-      drag.currentX = mouseCanvasX - drag.offsetX;
-      drag.currentY = mouseCanvasY - drag.offsetY;
+        applyElementPosition(drag.element, drag.currentX, drag.currentY);
+        return;
+      }
 
-      // Apply position directly to DOM - no React re-render
-      applyPostPosition(drag.element, drag.currentX, drag.currentY);
+      // Handle resize
+      const resize = resizeStateRef.current;
+      if (resize && resize.element) {
+        const cam = cameraRef.current;
+        const deltaX = (e.clientX - resize.startMouseX) / cam.scale;
+        const deltaY = (e.clientY - resize.startMouseY) / cam.scale;
+
+        const newWidth = Math.max(resize.type === 'post' ? 200 : 80, resize.startWidth + deltaX);
+        const newHeight = Math.max(resize.type === 'post' ? 120 : 40, resize.startHeight + deltaY);
+
+        applyElementSize(resize.element, newWidth, newHeight);
+      }
     };
 
     const handleMouseUp = () => {
+      // Handle drag end
       const drag = dragStateRef.current;
       if (drag && drag.element) {
-        // Reset styles
         drag.element.style.zIndex = '1';
         drag.element.style.cursor = 'grab';
 
-        // Save final position to database
-        onUpdatePosition(drag.postId, drag.currentX, drag.currentY);
+        if (drag.type === 'post') {
+          onUpdatePosition(drag.id, drag.currentX, drag.currentY);
+        } else {
+          onUpdateTextNote(drag.id, {
+            position_x: drag.currentX,
+            position_y: drag.currentY,
+          });
+        }
 
         dragStateRef.current = null;
-        setDraggingPostId(null);
-        setCursorState('grab');
+        setDraggingId(null);
+        setCursorState(isTextMode ? 'crosshair' : 'grab');
+      }
+
+      // Handle resize end
+      const resize = resizeStateRef.current;
+      if (resize && resize.element) {
+        const rect = resize.element.getBoundingClientRect();
+        const cam = cameraRef.current;
+        const newWidth = rect.width / cam.scale;
+        const newHeight = rect.height / cam.scale;
+
+        if (resize.type === 'post') {
+          onUpdateDimensions(resize.id, newWidth, newHeight);
+        } else {
+          onUpdateTextNote(resize.id, {
+            width: newWidth,
+            height: newHeight,
+          });
+        }
+
+        resizeStateRef.current = null;
+        setResizingId(null);
       }
     };
 
@@ -182,14 +435,26 @@ export default function Whiteboard({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [applyPostPosition, onUpdatePosition]);
+  }, [applyElementPosition, applyElementSize, onUpdatePosition, onUpdateDimensions, onUpdateTextNote, isTextMode]);
 
-  // Store ref for each post
-  const setPostRef = useCallback((id: string, element: HTMLDivElement | null) => {
+  // Keyboard handler for Escape to clear selection
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        clearSelection();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [clearSelection]);
+
+  // Store ref for each element
+  const setElementRef = useCallback((id: string, element: HTMLDivElement | null) => {
     if (element) {
-      postRefs.current.set(id, element);
+      elementRefs.current.set(id, element);
     } else {
-      postRefs.current.delete(id);
+      elementRefs.current.delete(id);
     }
   }, []);
 
@@ -213,22 +478,25 @@ export default function Whiteboard({
   }, [applyTransform]);
 
   const handleFitContent = useCallback(() => {
-    if (posts.length === 0) {
+    const allItems = [
+      ...posts.map(p => ({ x: p.position_x, y: p.position_y, w: p.width || 300, h: 200 })),
+      ...textNotes.map(n => ({ x: n.position_x, y: n.position_y, w: n.width, h: n.height })),
+    ];
+
+    if (allItems.length === 0) {
       handleResetView();
       return;
     }
 
     const padding = 100;
-    const postWidth = 300;
-    const postHeight = 200;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
-    posts.forEach((post) => {
-      minX = Math.min(minX, post.position_x);
-      minY = Math.min(minY, post.position_y);
-      maxX = Math.max(maxX, post.position_x + postWidth);
-      maxY = Math.max(maxY, post.position_y + postHeight);
+    allItems.forEach((item) => {
+      minX = Math.min(minX, item.x);
+      minY = Math.min(minY, item.y);
+      maxX = Math.max(maxX, item.x + item.w);
+      maxY = Math.max(maxY, item.y + item.h);
     });
 
     const contentWidth = maxX - minX + padding * 2;
@@ -251,7 +519,18 @@ export default function Whiteboard({
     };
     applyTransform();
     setCameraState({ ...cameraRef.current });
-  }, [posts, handleResetView, applyTransform]);
+  }, [posts, textNotes, handleResetView, applyTransform]);
+
+  const hasContent = posts.length > 0 || textNotes.length > 0;
+
+  // Get position for an element (either from stacking animation or original)
+  const getElementPosition = (id: string, originalX: number, originalY: number) => {
+    const stackPos = stackingPositions.get(id);
+    if (stackPos) {
+      return { x: stackPos.x, y: stackPos.y, rotation: stackPos.rotation, zIndex: stackPos.zIndex };
+    }
+    return { x: originalX, y: originalY, rotation: 0, zIndex: 1 };
+  };
 
   return (
     <>
@@ -273,37 +552,87 @@ export default function Whiteboard({
             willChange: 'transform',
           }}
         >
-          {posts.map((post) => (
-            <div
-              key={post.id}
-              ref={(el) => setPostRef(post.id, el)}
-              className="absolute pointer-events-auto"
-              style={{
-                left: post.position_x,
-                top: post.position_y,
-                cursor: 'grab',
-                zIndex: 1,
-                willChange: draggingPostId === post.id ? 'left, top' : 'auto',
-              }}
-              onMouseDown={(e) => handlePostMouseDown(e, post)}
-            >
-              <PostCard
-                post={post}
-                onDelete={onDeletePost}
-                isDragging={draggingPostId === post.id}
-              />
-            </div>
-          ))}
+          {/* Render posts */}
+          {posts.map((post) => {
+            const pos = getElementPosition(post.id, post.position_x, post.position_y);
+            const itemIsSelected = isSelected(post.id);
+            const isAnimating = stackingPositions.has(post.id);
+
+            return (
+              <div
+                key={post.id}
+                ref={(el) => setElementRef(post.id, el)}
+                className="absolute pointer-events-auto"
+                style={{
+                  left: pos.x,
+                  top: pos.y,
+                  width: post.width || 300,
+                  cursor: 'grab',
+                  zIndex: pos.zIndex,
+                  willChange: draggingId === post.id || resizingId === post.id || isAnimating ? 'left, top, width, height, transform' : 'auto',
+                  transition: isAnimating ? 'left 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+                  transform: pos.rotation !== 0 ? `rotate(${pos.rotation}deg)` : undefined,
+                }}
+                onMouseDown={(e) => handleElementMouseDown(e, post.id, 'post', post.position_x, post.position_y)}
+              >
+                <PostCard
+                  post={post}
+                  onDelete={onDeletePost}
+                  isDragging={draggingId === post.id}
+                  isResizing={resizingId === post.id}
+                  isSelected={itemIsSelected}
+                  width={post.width}
+                />
+              </div>
+            );
+          })}
+
+          {/* Render text notes */}
+          {textNotes.map((note) => {
+            const pos = getElementPosition(note.id, note.position_x, note.position_y);
+            const itemIsSelected = isSelected(note.id);
+            const isAnimating = stackingPositions.has(note.id);
+
+            return (
+              <div
+                key={note.id}
+                ref={(el) => setElementRef(note.id, el)}
+                className="absolute pointer-events-auto"
+                style={{
+                  left: pos.x,
+                  top: pos.y,
+                  width: note.width,
+                  height: note.height,
+                  cursor: 'grab',
+                  zIndex: pos.zIndex,
+                  willChange: draggingId === note.id || resizingId === note.id || isAnimating ? 'left, top, width, height, transform' : 'auto',
+                  transition: isAnimating ? 'left 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none',
+                  transform: pos.rotation !== 0 ? `rotate(${pos.rotation}deg)` : undefined,
+                }}
+                onMouseDown={(e) => handleElementMouseDown(e, note.id, 'textNote', note.position_x, note.position_y)}
+              >
+                <TextNote
+                  note={note}
+                  onUpdate={onUpdateTextNote}
+                  onDelete={onDeleteTextNote}
+                  isDragging={draggingId === note.id}
+                  isResizing={resizingId === note.id}
+                  isSelected={itemIsSelected}
+                  scale={cameraState.scale}
+                />
+              </div>
+            );
+          })}
         </div>
 
-        {posts.length === 0 && (
+        {!hasContent && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="text-center">
               <p className="text-lg font-medium text-zinc-500">
-                No posts yet
+                No content yet
               </p>
               <p className="mt-1 text-sm text-zinc-400">
-                Use the Chrome extension to add posts from X
+                Use the Chrome extension to add posts from X, or click the T button to add text
               </p>
             </div>
           </div>
@@ -316,6 +645,10 @@ export default function Whiteboard({
         onZoomOut={handleZoomOut}
         onResetView={handleResetView}
         onFitContent={handleFitContent}
+        isTextMode={isTextMode}
+        onToggleTextMode={handleToggleTextMode}
+        selectedCount={selectedItems.length}
+        onStackSelected={handleStackSelected}
       />
     </>
   );
