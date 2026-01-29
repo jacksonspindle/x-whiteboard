@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Create Extension Icons</title>
+</head>
+<body>
+  <h2>Extension Icons (save these as PNG)</h2>
+  <p>Right-click each canvas and save as the corresponding filename</p>
+  
+  <h3>icon-16.png</h3>
+  <canvas id="icon16" width="16" height="16"></canvas>
+  
+  <h3>icon-48.png</h3>
+  <canvas id="icon48" width="48" height="48"></canvas>
+  
+  <h3>icon-128.png</h3>
+  <canvas id="icon128" width="128" height="128"></canvas>
+
+  <script>
+    function drawIcon(ctx, size) {
+      const padding = size * 0.0625;
+      const radius = size * 0.125;
+      
+      // Background
+      ctx.fillStyle = '#2563eb';
+      ctx.beginPath();
+      ctx.roundRect(padding, padding, size - padding * 2, size - padding * 2, radius);
+      ctx.fill();
+      
+      // Grid lines
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = size * 0.03;
+      
+      // Vertical lines
+      ctx.beginPath();
+      ctx.moveTo(size * 0.375, padding);
+      ctx.lineTo(size * 0.375, size - padding);
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.moveTo(size * 0.625, padding);
+      ctx.lineTo(size * 0.625, size - padding);
+      ctx.stroke();
+      
+      // Horizontal lines
+      ctx.beginPath();
+      ctx.moveTo(padding, size * 0.375);
+      ctx.lineTo(size - padding, size * 0.375);
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.moveTo(padding, size * 0.625);
+      ctx.lineTo(size - padding, size * 0.625);
+      ctx.stroke();
+    }
+    
+    [16, 48, 128].forEach(size => {
+      const canvas = document.getElementById('icon' + size);
+      const ctx = canvas.getContext('2d');
+      drawIcon(ctx, size);
+    });
+  </script>
+</body>
+</html>

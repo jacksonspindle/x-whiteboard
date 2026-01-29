@@ -50,12 +50,12 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 1. Open Chrome and go to `chrome://extensions`
 2. Enable "Developer mode" in the top right
 3. Click "Load unpacked"
-4. Select the `x-whiteboard-extension` folder
+4. Select the `extension` folder from this repo
 5. Click the extension icon and log in with your credentials
 
 ### Extension Configuration
 
-The extension needs your Supabase URL and anon key to authenticate. Update these in `popup/popup.js`:
+The extension needs your Supabase URL and anon key to authenticate. Update these in `extension/popup/popup.js`:
 
 ```javascript
 const SUPABASE_URL = 'https://your-project.supabase.co';

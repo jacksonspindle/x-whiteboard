@@ -1,0 +1,86 @@
+/* X Whiteboard Extension Styles */
+
+.x-whiteboard-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  color: rgb(113, 118, 123);
+}
+
+.x-whiteboard-btn:hover {
+  background-color: rgba(29, 155, 240, 0.1);
+  color: rgb(29, 155, 240);
+}
+
+.x-whiteboard-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.x-whiteboard-btn.success {
+  color: rgb(0, 186, 124);
+}
+
+.x-whiteboard-btn.success:hover {
+  background-color: rgba(0, 186, 124, 0.1);
+}
+
+.x-whiteboard-btn.loading {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.x-whiteboard-btn.loading svg {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Toast notification */
+.x-whiteboard-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  padding: 12px 20px;
+  background: #1d9bf0;
+  color: white;
+  border-radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 9999;
+  animation: slideIn 0.3s ease;
+}
+
+.x-whiteboard-toast.error {
+  background: #f4212e;
+}
+
+.x-whiteboard-toast.success {
+  background: #00ba7c;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
