@@ -12,6 +12,7 @@ interface TextNoteProps {
   isResizing?: boolean;
   isSelected?: boolean;
   scale: number;
+  showPorts?: boolean;
 }
 
 export default function TextNote({
@@ -22,6 +23,7 @@ export default function TextNote({
   isResizing,
   isSelected,
   scale,
+  showPorts,
 }: TextNoteProps) {
   const [isEditing, setIsEditing] = useState(note.content === '');
   const [localContent, setLocalContent] = useState(note.content);
@@ -135,6 +137,38 @@ export default function TextNote({
           borderRadius: '0 0 8px 0',
         }}
       />
+
+      {/* Connection ports */}
+      {(['top', 'right', 'bottom', 'left'] as const).map((direction) => {
+        const portStyles: Record<string, React.CSSProperties> = {
+          top: { top: -9, left: '50%', transform: 'translateX(-50%)' },
+          right: { top: '50%', right: -9, transform: 'translateY(-50%)' },
+          bottom: { bottom: -9, left: '50%', transform: 'translateX(-50%)' },
+          left: { top: '50%', left: -9, transform: 'translateY(-50%)' },
+        };
+        return (
+          <div
+            key={direction}
+            data-connection-port={direction}
+            data-element-id={note.id}
+            data-element-type="textNote"
+            className={`absolute z-30 rounded-full transition-all duration-150 ${
+              showPorts
+                ? 'opacity-100 scale-100'
+                : 'opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100'
+            }`}
+            style={{
+              ...portStyles[direction],
+              width: 18,
+              height: 18,
+              background: '#3b82f6',
+              border: '2px solid white',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+              cursor: 'crosshair',
+            }}
+          />
+        );
+      })}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import Whiteboard from '@/components/Whiteboard';
 import AuthButton from '@/components/AuthButton';
 import { usePosts } from '@/hooks/usePosts';
 import { useTextNotes } from '@/hooks/useTextNotes';
+import { useConnections } from '@/hooks/useConnections';
 import { Layers, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -15,10 +16,11 @@ export default function WhiteboardPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const { posts, loading: postsLoading, updatePosition, updateDimensions, deletePost } = usePosts();
   const { textNotes, loading: notesLoading, createTextNote, updateTextNote, deleteTextNote } = useTextNotes();
+  const { connections, loading: connectionsLoading, createConnection, deleteConnection } = useConnections();
   const router = useRouter();
   const supabase = createClient();
 
-  const loading = postsLoading || notesLoading;
+  const loading = postsLoading || notesLoading || connectionsLoading;
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -47,12 +49,12 @@ export default function WhiteboardPage() {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
+    <div className="flex h-screen flex-col">
       {/* Header */}
-      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-3">
         <Link href="/" className="flex items-center gap-2">
           <Layers className="h-6 w-6 text-blue-600" />
-          <span className="text-lg font-bold">X Whiteboard</span>
+          <span className="text-lg font-bold text-zinc-900">X Whiteboard</span>
         </Link>
         <div className="flex items-center gap-4">
           <span className="text-sm text-zinc-500">
@@ -78,6 +80,9 @@ export default function WhiteboardPage() {
             onCreateTextNote={createTextNote}
             onUpdateTextNote={updateTextNote}
             onDeleteTextNote={deleteTextNote}
+            connections={connections}
+            onCreateConnection={createConnection}
+            onDeleteConnection={deleteConnection}
           />
         )}
       </div>

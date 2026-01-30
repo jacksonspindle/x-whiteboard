@@ -1,10 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Post, TextNote as TextNoteType } from '@/lib/types';
+import { Post, TextNote as TextNoteType, Connection, PortDirection } from '@/lib/types';
 import PostCard from './PostCard';
 import TextNote from './TextNote';
 import Toolbar from './Toolbar';
+import ConnectionLayer from './ConnectionLayer';
+import AskAIModal from './AskAIModal';
 
 interface WhiteboardProps {
   posts: Post[];
@@ -15,6 +17,9 @@ interface WhiteboardProps {
   onCreateTextNote: (x: number, y: number) => Promise<TextNoteType | null>;
   onUpdateTextNote: (id: string, updates: Partial<TextNoteType>) => void;
   onDeleteTextNote: (id: string) => void;
+  connections: Connection[];
+  onCreateConnection: (fromId: string, fromType: 'post' | 'textNote', toId: string, toType: 'post' | 'textNote') => Promise<Connection | null>;
+  onDeleteConnection: (id: string) => void;
 }
 
 const MIN_SCALE = 0.1;
@@ -33,6 +38,9 @@ export default function Whiteboard({
   onCreateTextNote,
   onUpdateTextNote,
   onDeleteTextNote,
+  connections,
+  onCreateConnection,
+  onDeleteConnection,
 }: WhiteboardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -73,6 +81,15 @@ export default function Whiteboard({
     element: HTMLDivElement | null;
   } | null>(null);
   const [resizingId, setResizingId] = useState<string | null>(null);
+
+  // Connection state
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectingFrom, setConnectingFrom] = useState<{ id: string; type: 'post' | 'textNote'; direction: PortDirection } | null>(null);
+  const [connectionMousePos, setConnectionMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+
+  // Ask AI modal state
+  const [showAskAIModal, setShowAskAIModal] = useState(false);
 
   // Stacking animation state
   const [stackingPositions, setStackingPositions] = useState<Map<string, { x: number; y: number; rotation: number; zIndex: number }>>(new Map());
@@ -226,6 +243,7 @@ export default function Whiteboard({
     if (!e.shiftKey && selectedItems.length > 0) {
       clearSelection();
     }
+    setSelectedConnectionId(null);
 
     // Otherwise start panning
     e.preventDefault();
@@ -249,29 +267,35 @@ export default function Whiteboard({
     }
   }, [isTextMode]);
 
-  // Handle mouse wheel for zooming
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
+  // Handle mouse wheel for zooming (attached imperatively for { passive: false })
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
 
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
 
-    const cam = cameraRef.current;
-    const newScale = Math.min(
-      MAX_SCALE,
-      Math.max(MIN_SCALE, cam.scale * (1 - e.deltaY * ZOOM_SENSITIVITY))
-    );
+      const cam = cameraRef.current;
+      const newScale = Math.min(
+        MAX_SCALE,
+        Math.max(MIN_SCALE, cam.scale * (1 - e.deltaY * ZOOM_SENSITIVITY))
+      );
 
-    const scaleRatio = newScale / cam.scale;
-    cam.x = mouseX - (mouseX - cam.x) * scaleRatio;
-    cam.y = mouseY - (mouseY - cam.y) * scaleRatio;
-    cam.scale = newScale;
+      const scaleRatio = newScale / cam.scale;
+      cam.x = mouseX - (mouseX - cam.x) * scaleRatio;
+      cam.y = mouseY - (mouseY - cam.y) * scaleRatio;
+      cam.scale = newScale;
 
-    applyTransform();
-    setCameraState({ ...cam });
+      applyTransform();
+      setCameraState({ ...cam });
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
   }, [applyTransform]);
 
   // Handle element drag start
@@ -284,6 +308,28 @@ export default function Whiteboard({
   ) => {
     if (e.button !== 0) return;
 
+    // Check if clicking on a connection port
+    const target = e.target as HTMLElement;
+    const portDirection = target.dataset.connectionPort as PortDirection | undefined;
+    if (portDirection) {
+      e.stopPropagation();
+      e.preventDefault();
+      setIsConnecting(true);
+      setConnectingFrom({ id, type, direction: portDirection });
+      setSelectedConnectionId(null);
+
+      // Set initial mouse position in canvas coords
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const cam = cameraRef.current;
+        setConnectionMousePos({
+          x: (e.clientX - rect.left - cam.x) / cam.scale,
+          y: (e.clientY - rect.top - cam.y) / cam.scale,
+        });
+      }
+      return;
+    }
+
     // Handle shift+click for multi-select
     if (e.shiftKey) {
       e.stopPropagation();
@@ -293,7 +339,6 @@ export default function Whiteboard({
     }
 
     // Check if clicking on resize handle
-    const target = e.target as HTMLElement;
     if (target.dataset.resizeHandle === 'true') {
       e.stopPropagation();
       e.preventDefault();
@@ -351,9 +396,31 @@ export default function Whiteboard({
     setCursorState('grabbing');
   }, [toggleSelection, isSelected, clearSelection]);
 
+  // Ref to track connection state in the global handler without stale closures
+  const isConnectingRef = useRef(false);
+  const connectingFromRef = useRef<{ id: string; type: 'post' | 'textNote'; direction: PortDirection } | null>(null);
+
+  useEffect(() => {
+    isConnectingRef.current = isConnecting;
+    connectingFromRef.current = connectingFrom;
+  }, [isConnecting, connectingFrom]);
+
   // Global mouse move/up handlers
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
+      // Handle connection drawing
+      if (isConnectingRef.current) {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+          const cam = cameraRef.current;
+          setConnectionMousePos({
+            x: (e.clientX - rect.left - cam.x) / cam.scale,
+            y: (e.clientY - rect.top - cam.y) / cam.scale,
+          });
+        }
+        return;
+      }
+
       // Handle drag
       const drag = dragStateRef.current;
       if (drag && drag.element) {
@@ -385,7 +452,37 @@ export default function Whiteboard({
       }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+      // Handle connection end
+      if (isConnectingRef.current && connectingFromRef.current) {
+        // Walk up from the drop target to find an element with data-element-id
+        let target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+        let targetId: string | undefined;
+        let targetType: 'post' | 'textNote' | undefined;
+
+        while (target && !targetId) {
+          if (target.dataset?.elementId && target.dataset?.elementType) {
+            targetId = target.dataset.elementId;
+            targetType = target.dataset.elementType as 'post' | 'textNote';
+          }
+          target = target.parentElement;
+        }
+
+        if (targetId && targetType && targetId !== connectingFromRef.current.id) {
+          onCreateConnection(
+            connectingFromRef.current.id,
+            connectingFromRef.current.type,
+            targetId,
+            targetType,
+          );
+        }
+
+        setIsConnecting(false);
+        setConnectingFrom(null);
+        setConnectionMousePos(null);
+        return;
+      }
+
       // Handle drag end
       const drag = dragStateRef.current;
       if (drag && drag.element) {
@@ -435,19 +532,29 @@ export default function Whiteboard({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [applyElementPosition, applyElementSize, onUpdatePosition, onUpdateDimensions, onUpdateTextNote, isTextMode]);
+  }, [applyElementPosition, applyElementSize, onUpdatePosition, onUpdateDimensions, onUpdateTextNote, isTextMode, onCreateConnection]);
 
-  // Keyboard handler for Escape to clear selection
+  // Keyboard handler for Escape to clear selection, Delete/Backspace for connections
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         clearSelection();
+        setSelectedConnectionId(null);
+        if (isConnecting) {
+          setIsConnecting(false);
+          setConnectingFrom(null);
+          setConnectionMousePos(null);
+        }
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedConnectionId) {
+        onDeleteConnection(selectedConnectionId);
+        setSelectedConnectionId(null);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection]);
+  }, [clearSelection, selectedConnectionId, onDeleteConnection, isConnecting]);
 
   // Store ref for each element
   const setElementRef = useCallback((id: string, element: HTMLDivElement | null) => {
@@ -521,6 +628,72 @@ export default function Whiteboard({
     setCameraState({ ...cameraRef.current });
   }, [posts, textNotes, handleResetView, applyTransform]);
 
+  // Ask AI handler
+  const handleAskAI = useCallback(() => {
+    if (selectedItems.length === 0) return;
+    setShowAskAIModal(true);
+  }, [selectedItems.length]);
+
+  const handleAskAISubmit = useCallback(async (prompt: string) => {
+    // Gather content from selected items
+    const selectedPosts = selectedItems
+      .map(item => {
+        if (item.type === 'post') {
+          const post = posts.find(p => p.id === item.id);
+          if (post) return { author: post.author_handle || 'unknown', content: post.content || '' };
+        } else {
+          const note = textNotes.find(n => n.id === item.id);
+          if (note) return { author: 'note', content: note.content || '' };
+        }
+        return null;
+      })
+      .filter((p): p is { author: string; content: string } => p !== null);
+
+    if (selectedPosts.length === 0) return;
+
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, posts: selectedPosts }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Failed to get AI response');
+    }
+
+    const { response } = await res.json();
+
+    // Calculate position near selected items (offset to the right)
+    let avgX = 0, avgY = 0, count = 0;
+    selectedItems.forEach(item => {
+      if (item.type === 'post') {
+        const post = posts.find(p => p.id === item.id);
+        if (post) { avgX += post.position_x; avgY += post.position_y; count++; }
+      } else {
+        const note = textNotes.find(n => n.id === item.id);
+        if (note) { avgX += note.position_x; avgY += note.position_y; count++; }
+      }
+    });
+
+    if (count > 0) {
+      avgX = avgX / count + 350;
+      avgY = avgY / count;
+    }
+
+    // Create a text note with the AI response
+    const newNote = await onCreateTextNote(avgX, avgY);
+    if (newNote) {
+      onUpdateTextNote(newNote.id, {
+        content: response,
+        width: 350,
+        height: 250,
+      });
+    }
+
+    setShowAskAIModal(false);
+  }, [selectedItems, posts, textNotes, onCreateTextNote, onUpdateTextNote]);
+
   const hasContent = posts.length > 0 || textNotes.length > 0;
 
   // Get position for an element (either from stacking animation or original)
@@ -542,7 +715,6 @@ export default function Whiteboard({
         onMouseMove={handleCanvasMouseMove}
         onMouseUp={handleCanvasMouseUp}
         onMouseLeave={handleCanvasMouseUp}
-        onWheel={handleWheel}
       >
         <div
           ref={canvasRef}
@@ -563,6 +735,8 @@ export default function Whiteboard({
                 key={post.id}
                 ref={(el) => setElementRef(post.id, el)}
                 className="absolute pointer-events-auto"
+                data-element-id={post.id}
+                data-element-type="post"
                 style={{
                   left: pos.x,
                   top: pos.y,
@@ -582,6 +756,7 @@ export default function Whiteboard({
                   isResizing={resizingId === post.id}
                   isSelected={itemIsSelected}
                   width={post.width}
+                  showPorts={isConnecting}
                 />
               </div>
             );
@@ -598,6 +773,8 @@ export default function Whiteboard({
                 key={note.id}
                 ref={(el) => setElementRef(note.id, el)}
                 className="absolute pointer-events-auto"
+                data-element-id={note.id}
+                data-element-type="textNote"
                 style={{
                   left: pos.x,
                   top: pos.y,
@@ -619,10 +796,25 @@ export default function Whiteboard({
                   isResizing={resizingId === note.id}
                   isSelected={itemIsSelected}
                   scale={cameraState.scale}
+                  showPorts={isConnecting}
                 />
               </div>
             );
           })}
+
+          {/* Connection arrows layer */}
+          <ConnectionLayer
+            connections={connections}
+            posts={posts}
+            textNotes={textNotes}
+            elementRefs={elementRefs}
+            onDeleteConnection={onDeleteConnection}
+            isConnecting={isConnecting}
+            connectingFrom={connectingFrom}
+            mousePosition={connectionMousePos}
+            selectedConnectionId={selectedConnectionId}
+            onSelectConnection={setSelectedConnectionId}
+          />
         </div>
 
         {!hasContent && (
@@ -649,7 +841,16 @@ export default function Whiteboard({
         onToggleTextMode={handleToggleTextMode}
         selectedCount={selectedItems.length}
         onStackSelected={handleStackSelected}
+        onAskAI={handleAskAI}
       />
+
+      {showAskAIModal && (
+        <AskAIModal
+          selectedCount={selectedItems.length}
+          onSubmit={handleAskAISubmit}
+          onClose={() => setShowAskAIModal(false)}
+        />
+      )}
     </>
   );
 }

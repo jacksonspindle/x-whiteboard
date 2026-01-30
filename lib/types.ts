@@ -51,6 +51,18 @@ export interface TextNote {
   created_at: string;
 }
 
+export interface Connection {
+  id: string;
+  user_id: string;
+  from_id: string;
+  from_type: 'post' | 'textNote';
+  to_id: string;
+  to_type: 'post' | 'textNote';
+  created_at: string;
+}
+
+export type PortDirection = 'top' | 'right' | 'bottom' | 'left';
+
 export interface PostCreateInput {
   tweet_id: string;
   tweet_url: string;

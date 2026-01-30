@@ -1,6 +1,6 @@
 'use client';
 
-import { ZoomIn, ZoomOut, Maximize, Home, Type, MousePointer2, Layers } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, Home, Type, MousePointer2, Layers, Sparkles } from 'lucide-react';
 
 interface ToolbarProps {
   scale: number;
@@ -12,6 +12,7 @@ interface ToolbarProps {
   onToggleTextMode?: () => void;
   selectedCount?: number;
   onStackSelected?: () => void;
+  onAskAI?: () => void;
 }
 
 export default function Toolbar({
@@ -24,6 +25,7 @@ export default function Toolbar({
   onToggleTextMode,
   selectedCount = 0,
   onStackSelected,
+  onAskAI,
 }: ToolbarProps) {
   const zoomPercentage = Math.round(scale * 100);
 
@@ -60,17 +62,32 @@ export default function Toolbar({
         </>
       )}
 
-      {/* Stack button - shows when multiple items selected */}
-      {selectedCount >= 2 && onStackSelected && (
+      {/* Selection actions */}
+      {selectedCount >= 1 && (
         <>
-          <button
-            onClick={onStackSelected}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-600"
-            title="Stack selected items"
-          >
-            <Layers className="h-4 w-4" />
-            <span>Stack {selectedCount}</span>
-          </button>
+          {/* Ask AI button */}
+          {onAskAI && (
+            <button
+              onClick={onAskAI}
+              className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+              title="Ask AI about selected items"
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>Ask AI</span>
+            </button>
+          )}
+
+          {/* Stack button - shows when 2+ items selected */}
+          {selectedCount >= 2 && onStackSelected && (
+            <button
+              onClick={onStackSelected}
+              className="flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-blue-600"
+              title="Stack selected items"
+            >
+              <Layers className="h-4 w-4" />
+              <span>Stack {selectedCount}</span>
+            </button>
+          )}
 
           <div className="mx-2 h-6 w-px bg-zinc-200 dark:bg-zinc-700" />
         </>
